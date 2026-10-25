@@ -34,7 +34,12 @@ class MusicPlaybackService : MediaSessionService() {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
             // Only a transition on the outgoing player can invalidate the fade.
             // The incoming player's initial playlist transition is expected.
-            if (transitioning && owner === outgoingPlayer) cancelTransition()
+            // The outgoing player reaching the end during a crossfade is expected:
+            // it may auto-advance while its volume is already fading to zero.
+            // Only cancel for a user/playlist-driven transition, not normal auto-advance.
+            if (transitioning && owner === outgoingPlayer &&
+                reason != Player.MEDIA_ITEM_TRANSITION_REASON_AUTO
+            ) cancelTransition()
         }
     }
 
@@ -58,12 +63,18 @@ class MusicPlaybackService : MediaSessionService() {
                     if (outgoing != null && incoming != null) {
                         if (outgoing.isPlaying) {
                             if (pausedAt != 0L) {
-                                transitionStartedAt += (SystemClock.elapsedRealtime() - pausedAt).coerceAtLeast(0L)
+                                if (transitionStartedAt != 0L) {
+                                    transitionStartedAt += (SystemClock.elapsedRealtime() - pausedAt).coerceAtLeast(0L)
+                                }
                                 pausedAt = 0L
                             }
                             // Wait for the next track to be ready before fading, otherwise
                             // the outgoing track can fade into silence while it buffers.
                             if (incoming.playbackState == Player.STATE_READY) {
+                                // Start the 4-second clock only when both tracks can actually play.
+                                if (transitionStartedAt == 0L) {
+                                    transitionStartedAt = SystemClock.elapsedRealtime()
+                                }
                                 incoming.play()
                                 val elapsed = (SystemClock.elapsedRealtime() - transitionStartedAt).coerceAtLeast(0L)
                                 val fraction = (elapsed.toFloat() / transitionMs.toFloat()).coerceIn(0f, 1f)
@@ -127,7 +138,7 @@ class MusicPlaybackService : MediaSessionService() {
             incoming.volume = 0f
             incoming.prepare()
             transitioning = true
-            transitionStartedAt = SystemClock.elapsedRealtime()
+            transitionStartedAt = 0L
             pausedAt = 0L
             outgoingPlayer = outgoing
             incomingPlayer = incoming
