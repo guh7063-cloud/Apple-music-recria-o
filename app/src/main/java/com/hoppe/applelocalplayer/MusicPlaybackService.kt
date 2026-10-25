@@ -91,6 +91,7 @@ class MusicPlaybackService : MediaSessionService() {
                 if (playbackState == Player.STATE_READY && !fadingOut && exoPlayer.volume == 0f) {
                     exoPlayer.volume = 1f
                 }
+            }
         })
         mediaSession = MediaSession.Builder(this, exoPlayer).build()
         handler.post(transitionTicker)
