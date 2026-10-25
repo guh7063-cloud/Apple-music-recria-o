@@ -11,7 +11,6 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
-import androidx.media3.common.ForwardingSimpleBasePlayer
 
 @UnstableApi
 class MusicPlaybackService : MediaSessionService() {
@@ -20,7 +19,6 @@ class MusicPlaybackService : MediaSessionService() {
     private var secondPlayer: ExoPlayer? = null
     private var activePlayer: ExoPlayer? = null
     private var standbyPlayer: ExoPlayer? = null
-    private var sessionPlayer: SwappablePlayer? = null
 
     private val handler = Handler(Looper.getMainLooper())
     private val transitionMs = 4_000L
@@ -103,9 +101,7 @@ class MusicPlaybackService : MediaSessionService() {
         first.addListener(playerListener)
         second.addListener(playerListener)
 
-        val forwardingPlayer = SwappablePlayer(first)
-        sessionPlayer = forwardingPlayer
-        mediaSession = MediaSession.Builder(this, forwardingPlayer).build()
+        mediaSession = MediaSession.Builder(this, first).build()
         handler.post(transitionTicker)
     }
 
@@ -139,7 +135,7 @@ class MusicPlaybackService : MediaSessionService() {
     private fun finishTransition(outgoing: ExoPlayer, incoming: ExoPlayer) {
         incoming.volume = 1f
         outgoing.volume = 0f
-        sessionPlayer?.swapTo(incoming)
+        mediaSession?.setPlayer(incoming)
         activePlayer = incoming
         standbyPlayer = outgoing
 
@@ -183,13 +179,7 @@ class MusicPlaybackService : MediaSessionService() {
         secondPlayer = null
         activePlayer = null
         standbyPlayer = null
-        sessionPlayer = null
         super.onDestroy()
     }
 
-    private class SwappablePlayer(initialPlayer: Player) : ForwardingSimpleBasePlayer(initialPlayer) {
-        fun swapTo(player: Player) {
-            setPlayer(player)
-        }
-    }
 }
