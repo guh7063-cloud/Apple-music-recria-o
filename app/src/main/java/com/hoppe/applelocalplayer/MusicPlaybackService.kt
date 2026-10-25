@@ -17,6 +17,8 @@ class MusicPlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
     private var firstPlayer: ExoPlayer? = null
     private var secondPlayer: ExoPlayer? = null
+    private var firstPlayerListener: Player.Listener? = null
+    private var secondPlayerListener: Player.Listener? = null
     private var activePlayer: ExoPlayer? = null
     private var standbyPlayer: ExoPlayer? = null
 
@@ -28,13 +30,11 @@ class MusicPlaybackService : MediaSessionService() {
     private var incomingPlayer: ExoPlayer? = null
     private var pausedAt = 0L
 
-    private val playerListener = object : Player.Listener {
+    private fun listenerFor(owner: ExoPlayer) = object : Player.Listener {
         override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-            // If a manual skip or a natural transition happens before the fade completes,
-            // cancel the prepared overlap and let ExoPlayer's normal queue transition win.
-            if (transitioning && this@MusicPlaybackService.activePlayer === outgoingPlayer) {
-                cancelTransition()
-            }
+            // Only a transition on the outgoing player can invalidate the fade.
+            // The incoming player's initial playlist transition is expected.
+            if (transitioning && owner === outgoingPlayer) cancelTransition()
         }
     }
 
@@ -45,7 +45,7 @@ class MusicPlaybackService : MediaSessionService() {
                 if (!transitioning) {
                     val duration = active.duration
                     val remaining = duration - active.currentPosition
-                    if (duration > 0L && duration != C.TIME_UNSET &&
+                    if (duration != C.TIME_UNSET && duration > 0L &&
                         remaining in 1L..transitionMs &&
                         active.repeatMode != Player.REPEAT_MODE_ONE &&
                         active.hasNextMediaItem()
@@ -62,14 +62,12 @@ class MusicPlaybackService : MediaSessionService() {
                                 pausedAt = 0L
                                 incoming.play()
                             }
-                            val elapsed = (SystemClock.elapsedRealtime() - transitionStartedAt)
-                                .coerceAtLeast(0L)
+                            val elapsed = (SystemClock.elapsedRealtime() - transitionStartedAt).coerceAtLeast(0L)
                             val fraction = (elapsed.toFloat() / transitionMs.toFloat()).coerceIn(0f, 1f)
                             outgoing.volume = 1f - fraction
                             incoming.volume = fraction
                             if (fraction >= 1f) finishTransition(outgoing, incoming)
                         } else {
-                            // Keep both players aligned if the user pauses during a fade.
                             incoming.pause()
                             if (pausedAt == 0L) pausedAt = SystemClock.elapsedRealtime()
                         }
@@ -98,8 +96,10 @@ class MusicPlaybackService : MediaSessionService() {
         secondPlayer = second
         activePlayer = first
         standbyPlayer = second
-        first.addListener(playerListener)
-        second.addListener(playerListener)
+        firstPlayerListener = listenerFor(first)
+        secondPlayerListener = listenerFor(second)
+        first.addListener(firstPlayerListener!!)
+        second.addListener(secondPlayerListener!!)
 
         mediaSession = MediaSession.Builder(this, first).build()
         handler.post(transitionTicker)
@@ -111,7 +111,7 @@ class MusicPlaybackService : MediaSessionService() {
         if (nextIndex !in 0 until outgoing.mediaItemCount) return
 
         val queue = (0 until outgoing.mediaItemCount).map(outgoing::getMediaItemAt)
-        runCatching {
+        try {
             incoming.stop()
             incoming.clearMediaItems()
             incoming.setMediaItems(queue, nextIndex, 0L)
@@ -119,17 +119,21 @@ class MusicPlaybackService : MediaSessionService() {
             incoming.shuffleModeEnabled = outgoing.shuffleModeEnabled
             incoming.volume = 0f
             incoming.prepare()
+            transitioning = true
+            transitionStartedAt = SystemClock.elapsedRealtime()
+            pausedAt = 0L
+            outgoingPlayer = outgoing
+            incomingPlayer = incoming
             incoming.play()
-        }.onFailure {
+        } catch (_: Exception) {
+            transitioning = false
+            outgoingPlayer = null
+            incomingPlayer = null
+            incoming.pause()
+            incoming.stop()
+            incoming.clearMediaItems()
             incoming.volume = 1f
-            return
         }
-
-        transitioning = true
-        transitionStartedAt = SystemClock.elapsedRealtime()
-        pausedAt = 0L
-        outgoingPlayer = outgoing
-        incomingPlayer = incoming
     }
 
     private fun finishTransition(outgoing: ExoPlayer, incoming: ExoPlayer) {
@@ -171,15 +175,16 @@ class MusicPlaybackService : MediaSessionService() {
         cancelTransition()
         mediaSession?.release()
         mediaSession = null
-        firstPlayer?.removeListener(playerListener)
-        secondPlayer?.removeListener(playerListener)
+        firstPlayer?.let { player -> firstPlayerListener?.let(player::removeListener) }
+        secondPlayer?.let { player -> secondPlayerListener?.let(player::removeListener) }
         firstPlayer?.release()
         secondPlayer?.release()
         firstPlayer = null
         secondPlayer = null
+        firstPlayerListener = null
+        secondPlayerListener = null
         activePlayer = null
         standbyPlayer = null
         super.onDestroy()
     }
-
 }
