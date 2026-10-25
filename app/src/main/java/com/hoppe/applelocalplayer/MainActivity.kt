@@ -8,6 +8,12 @@ import android.net.Uri
 import android.os.Build
 import android.os.Bundle
 import android.provider.MediaStore
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import org.json.JSONObject
+import java.net.HttpURLConnection
+import java.net.URL
+import java.net.URLEncoder
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -22,6 +28,8 @@ import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
+import androidx.compose.runtime.key
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -40,6 +48,9 @@ import androidx.media3.session.MediaController
 import androidx.media3.session.SessionToken
 import com.google.common.util.concurrent.ListenableFuture
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 private val Bg = Color(0xFF09090D)
 private val Panel = Color(0xFF191922)
@@ -48,6 +59,7 @@ private val Muted = Color(0xFFA5A5B3)
 private val White = Color(0xFFF8F8FC)
 
 data class Song(val title: String, val artist: String, val album: String, val duration: Long, val uri: Uri)
+data class YoutubeVideo(val id: String, val title: String, val channel: String, val description: String)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -61,6 +73,14 @@ class MainActivity : ComponentActivity() {
     private fun PlayerScreen() {
         var songs by remember { mutableStateOf(emptyList<Song>()) }
         var query by remember { mutableStateOf("") }
+        var ytApiKey by remember { mutableStateOf(loadYoutubeKey()) }
+        var ytKeyInput by remember { mutableStateOf(loadYoutubeKey()) }
+        var ytQuery by remember { mutableStateOf("") }
+        var ytResults by remember { mutableStateOf(emptyList<YoutubeVideo>()) }
+        var ytSelected by remember { mutableStateOf<YoutubeVideo?>(null) }
+        var ytLoading by remember { mutableStateOf(false) }
+        var ytStatus by remember { mutableStateOf("Informe sua chave da YouTube Data API para pesquisar.") }
+        val scope = rememberCoroutineScope()
         var section by remember { mutableStateOf("Músicas") }
         var selectedPlaylist by remember { mutableStateOf("") }
         var favorites by remember { mutableStateOf(loadFavorites()) }
@@ -173,7 +193,7 @@ class MainActivity : ComponentActivity() {
                     }
 
                     Row(Modifier.fillMaxWidth().padding(horizontal = 5.dp), horizontalArrangement = Arrangement.SpaceEvenly) {
-                        listOf("Músicas", "Artistas", "Álbuns", "Favoritas", "Playlists", "Fila").forEach { name ->
+                        listOf("Músicas", "Artistas", "Álbuns", "Favoritas", "Playlists", "Fila", "Explorar").forEach { name ->
                             TextButton(onClick = { section = name; if (name != "Playlists") selectedPlaylist = "" }, contentPadding = PaddingValues(horizontal = 5.dp), colors = ButtonDefaults.textButtonColors(contentColor = if (section == name) Accent else Muted)) {
                                 Text(name, fontSize = 10.sp, fontWeight = if (section == name) FontWeight.Bold else FontWeight.Normal)
                             }
@@ -189,7 +209,7 @@ class MainActivity : ComponentActivity() {
                             Spacer(Modifier.height(18.dp))
                             Button(onClick = { launcher.launch(permission) }, colors = ButtonDefaults.buttonColors(containerColor = Accent)) { Text("Encontrar minhas músicas") }
                         }
-                    } else if (section == "Fila") {
+                    } else if (section == "Explorar") {\n                        Column(Modifier.weight(1f).fillMaxWidth().padding(horizontal = 16.dp)) {\n                            Text("Explorar no YouTube", color = White, fontSize = 22.sp, fontWeight = FontWeight.Bold)\n                            Text("Reprodução pelo player oficial. Requer internet e não toca em segundo plano.", color = Muted, fontSize = 12.sp)\n                            Spacer(Modifier.height(8.dp))\n                            OutlinedTextField(value = ytKeyInput, onValueChange = { ytKeyInput = it }, modifier = Modifier.fillMaxWidth(), label = { Text("Chave da YouTube Data API") }, singleLine = true, colors = OutlinedTextFieldDefaults.colors(focusedTextColor = White, unfocusedTextColor = White, focusedBorderColor = Accent, unfocusedBorderColor = Panel))\n                            Row(verticalAlignment = Alignment.CenterVertically) {\n                                Button(onClick = { ytApiKey = ytKeyInput.trim(); saveYoutubeKey(ytApiKey); ytStatus = if (ytApiKey.isBlank()) "Informe sua chave da API." else "Chave salva neste dispositivo." }, colors = ButtonDefaults.buttonColors(containerColor = Accent)) { Text("Salvar chave") }\n                                Spacer(Modifier.width(8.dp))\n                                Text("A chave fica salva localmente.", color = Muted, fontSize = 10.sp)\n                            }\n                            Row(verticalAlignment = Alignment.CenterVertically) {\n                                OutlinedTextField(value = ytQuery, onValueChange = { ytQuery = it }, modifier = Modifier.weight(1f), label = { Text("Música ou artista") }, singleLine = true, colors = OutlinedTextFieldDefaults.colors(focusedTextColor = White, unfocusedTextColor = White, focusedBorderColor = Accent, unfocusedBorderColor = Panel))\n                                IconButton(enabled = ytApiKey.isNotBlank() && ytQuery.isNotBlank() && !ytLoading, onClick = { scope.launch { ytLoading = true; ytStatus = "Pesquisando…"; try { ytResults = searchYoutube(ytQuery, ytApiKey); ytStatus = if (ytResults.isEmpty()) "Nenhum resultado encontrado." else "${ytResults.size} resultados"; } catch (e: Exception) { ytStatus = "Falha na pesquisa. Confira a chave da API, a internet e a cota."; ytResults = emptyList() } finally { ytLoading = false } } }) { Icon(Icons.Default.Search, "Pesquisar no YouTube", tint = Accent) }\n                            }\n                            Text(ytStatus, color = Muted, fontSize = 12.sp)\n                            ytSelected?.let { video ->\n                                Text(video.title, color = White, fontWeight = FontWeight.Bold, maxLines = 2, overflow = TextOverflow.Ellipsis)\n                                key(video.id) { AndroidView(factory = { context -> WebView(context).apply { settings.javaScriptEnabled = true; settings.domStorageEnabled = true; webViewClient = WebViewClient(); val html = """<!doctype html><html><body style="margin:0;background:#000"><iframe width="100%" height="220" src="https://www.youtube-nocookie.com/embed/${video.id}?playsinline=1&autoplay=1" title="YouTube player" frameborder="0" allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share" referrerpolicy="strict-origin-when-cross-origin" allowfullscreen></iframe></body></html>"""; loadDataWithBaseURL("https://www.youtube-nocookie.com", html, "text/html", "UTF-8", null) } }, modifier = Modifier.fillMaxWidth().height(220.dp)) }\n                            }\n                            LazyColumn(Modifier.weight(1f), contentPadding = PaddingValues(vertical = 6.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {\n                                items(ytResults) { video -> Row(Modifier.fillMaxWidth().clip(RoundedCornerShape(12.dp)).background(Panel).clickable { ytSelected = video }.padding(12.dp), verticalAlignment = Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text(video.title, color = White, fontWeight = FontWeight.SemiBold, maxLines = 2, overflow = TextOverflow.Ellipsis); Text(video.channel, color = Accent, fontSize = 11.sp); Text(video.description, color = Muted, fontSize = 10.sp, maxLines = 2, overflow = TextOverflow.Ellipsis) }; IconButton(onClick = { ytSelected = video }) { Icon(Icons.Default.PlayCircle, "Tocar no player oficial", tint = Accent) } } }\n                            }\n                        }\n                    } else if (section == "Fila") {
                         Row(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 7.dp), verticalAlignment = Alignment.CenterVertically) {
                             Text("Fila de reprodução", color = White, fontSize = 20.sp, fontWeight = FontWeight.Bold)
                             Spacer(Modifier.weight(1f))
@@ -409,7 +429,7 @@ class MainActivity : ComponentActivity() {
         return out
     }
 
-    private fun loadFavorites(): Set<String> = getSharedPreferences("player_preferences", MODE_PRIVATE).getStringSet("favorites", emptySet())?.toSet() ?: emptySet()
+    private fun loadYoutubeKey(): String = getSharedPreferences("player_preferences", MODE_PRIVATE).getString("youtube_api_key", "") ?: ""\n    private fun saveYoutubeKey(value: String) { getSharedPreferences("player_preferences", MODE_PRIVATE).edit().putString("youtube_api_key", value).apply() }\n\n    private suspend fun searchYoutube(query: String, apiKey: String): List<YoutubeVideo> = withContext(Dispatchers.IO) {\n        val encoded = URLEncoder.encode(query, "UTF-8")\n        val url = URL("https://www.googleapis.com/youtube/v3/search?part=snippet&type=video&maxResults=15&q=$encoded&key=${URLEncoder.encode(apiKey, "UTF-8")}")\n        val connection = (url.openConnection() as HttpURLConnection).apply { requestMethod = "GET"; connectTimeout = 12000; readTimeout = 12000 }\n        try {\n            val code = connection.responseCode\n            val body = (if (code in 200..299) connection.inputStream else connection.errorStream).bufferedReader().use { it.readText() }\n            if (code !in 200..299) throw IllegalStateException("YouTube API returned $code: $body")\n            val root = JSONObject(body); val items = root.optJSONArray("items") ?: return@withContext emptyList()\n            (0 until items.length()).mapNotNull { i -> val item = items.optJSONObject(i) ?: return@mapNotNull null; val id = item.optJSONObject("id")?.optString("videoId").orEmpty(); val snippet = item.optJSONObject("snippet") ?: return@mapNotNull null; if (id.isBlank()) null else YoutubeVideo(id, snippet.optString("title", "Vídeo"), snippet.optString("channelTitle", "Canal"), snippet.optString("description", "")) }\n        } finally { connection.disconnect() }\n    }\n\n    private fun loadFavorites(): Set<String> = getSharedPreferences("player_preferences", MODE_PRIVATE).getStringSet("favorites", emptySet())?.toSet() ?: emptySet()
     private fun saveFavorites(values: Set<String>) { getSharedPreferences("player_preferences", MODE_PRIVATE).edit().putStringSet("favorites", values.toSet()).apply() }
 
     private fun loadPlaylists(): Map<String, Set<String>> {
