@@ -6,7 +6,7 @@ plugins {
 android {
     namespace = "com.hoppe.applelocalplayer"
     compileSdk = 35
-    defaultConfig { applicationId = "com.hoppe.applelocalplayer"; minSdk = 26; targetSdk = 35; versionCode = 2; versionName = "1.1" }
+    defaultConfig { applicationId = "com.hoppe.applelocalplayer"; minSdk = 26; targetSdk = 35; versionCode = 3; versionName = "1.2" }
     buildFeatures { compose = true }
     compileOptions { sourceCompatibility = JavaVersion.VERSION_17; targetCompatibility = JavaVersion.VERSION_17 }
 }
@@ -20,7 +20,7 @@ dependencies {
     implementation("androidx.compose.material3:material3")
     implementation("androidx.compose.material:material-icons-extended")
     implementation("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")
-    implementation("androidx.media3:media3-exoplayer:1.5.1")
-    implementation("androidx.media3:media3-common:1.5.1")
-    implementation("androidx.media3:media3-session:1.5.1")
+    implementation("androidx.media3:media3-exoplayer:1.11.1")
+    implementation("androidx.media3:media3-common:1.11.1")
+    implementation("androidx.media3:media3-session:1.11.1")
 }
