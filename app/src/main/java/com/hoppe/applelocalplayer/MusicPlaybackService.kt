@@ -59,6 +59,11 @@ class MusicPlaybackService : MediaSessionService() {
                     val incoming = incomingPlayer
                     if (outgoing != null && incoming != null) {
                         if (outgoing.isPlaying) {
+                            if (pausedAt != 0L) {
+                                transitionStartedAt += (SystemClock.elapsedRealtime() - pausedAt).coerceAtLeast(0L)
+                                pausedAt = 0L
+                                incoming.play()
+                            }
                             val elapsed = (SystemClock.elapsedRealtime() - transitionStartedAt)
                                 .coerceAtLeast(0L)
                             val fraction = (elapsed.toFloat() / transitionMs.toFloat()).coerceIn(0f, 1f)
