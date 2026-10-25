@@ -41,8 +41,8 @@ class MusicPlaybackService : MediaSessionService() {
     private val transitionTicker = object : Runnable {
         override fun run() {
             val active = activePlayer
-            if (active != null && active.isPlaying) {
-                if (!transitioning) {
+            if (active != null) {
+                if (!transitioning && active.isPlaying) {
                     val duration = active.duration
                     val remaining = duration - active.currentPosition
                     if (duration != C.TIME_UNSET && duration > 0L &&
@@ -52,7 +52,7 @@ class MusicPlaybackService : MediaSessionService() {
                     ) {
                         beginTransition(active)
                     }
-                } else {
+                } else if (transitioning) {
                     val outgoing = outgoingPlayer
                     val incoming = incomingPlayer
                     if (outgoing != null && incoming != null) {
@@ -60,13 +60,20 @@ class MusicPlaybackService : MediaSessionService() {
                             if (pausedAt != 0L) {
                                 transitionStartedAt += (SystemClock.elapsedRealtime() - pausedAt).coerceAtLeast(0L)
                                 pausedAt = 0L
-                                incoming.play()
                             }
-                            val elapsed = (SystemClock.elapsedRealtime() - transitionStartedAt).coerceAtLeast(0L)
-                            val fraction = (elapsed.toFloat() / transitionMs.toFloat()).coerceIn(0f, 1f)
-                            outgoing.volume = 1f - fraction
-                            incoming.volume = fraction
-                            if (fraction >= 1f) finishTransition(outgoing, incoming)
+                            // Wait for the next track to be ready before fading, otherwise
+                            // the outgoing track can fade into silence while it buffers.
+                            if (incoming.playbackState == Player.STATE_READY) {
+                                incoming.play()
+                                val elapsed = (SystemClock.elapsedRealtime() - transitionStartedAt).coerceAtLeast(0L)
+                                val fraction = (elapsed.toFloat() / transitionMs.toFloat()).coerceIn(0f, 1f)
+                                outgoing.volume = 1f - fraction
+                                incoming.volume = fraction
+                                if (fraction >= 1f) finishTransition(outgoing, incoming)
+                            } else {
+                                outgoing.volume = 1f
+                                incoming.volume = 0f
+                            }
                         } else {
                             incoming.pause()
                             if (pausedAt == 0L) pausedAt = SystemClock.elapsedRealtime()
