@@ -78,7 +78,7 @@ class MainActivity : ComponentActivity() {
   MaterialTheme(colorScheme = darkColorScheme(primary = Accent, background = Bg, surface = Panel)) {
    Surface(Modifier.fillMaxSize(), color = Bg) { Column(Modifier.fillMaxSize()) {
     Column(Modifier.fillMaxWidth().background(Brush.verticalGradient(listOf(Color(0xFF321A28), Bg))).padding(start=20.dp,end=20.dp,top=18.dp,bottom=14.dp)) {
-     Row(verticalAlignment=Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("LOCAL PLAYER", color=Accent, fontSize=11.sp, fontWeight=FontWeight.Bold, letterSpacing=3.sp); Text("Sua música.", color=White, fontSize=32.sp, fontWeight=FontWeight.ExtraBold); Text("Ouça do seu jeito.", color=Muted) }; Icon(Icons.Default.GraphicEq,null,tint=Accent,modifier=Modifier.size(46.dp)) }
+     Row(verticalAlignment=Alignment.CenterVertically) { Column(Modifier.weight(1f)) { Text("THIRTY FIVE MUSIC", color=Accent, fontSize=11.sp, fontWeight=FontWeight.Bold, letterSpacing=3.sp); Text("Sua música.", color=White, fontSize=32.sp, fontWeight=FontWeight.ExtraBold); Text("Ouça do seu jeito.", color=Muted) }; Icon(Icons.Default.GraphicEq,null,tint=Accent,modifier=Modifier.size(46.dp)) }
      Spacer(Modifier.height(15.dp))
      OutlinedTextField(value=query,onValueChange={query=it},modifier=Modifier.fillMaxWidth(),placeholder={Text("Buscar faixa, artista ou álbum",color=Muted)},leadingIcon={Icon(Icons.Default.Search,null,tint=Muted)},singleLine=true,shape=RoundedCornerShape(16.dp),colors=OutlinedTextFieldDefaults.colors(focusedBorderColor=Accent,unfocusedBorderColor=Panel,focusedTextColor=White,unfocusedTextColor=White,cursorColor=Accent,focusedContainerColor=Panel,unfocusedContainerColor=Panel))
     }
