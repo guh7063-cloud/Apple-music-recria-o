@@ -11,100 +11,180 @@ import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.session.MediaSession
 import androidx.media3.session.MediaSessionService
+import androidx.media3.common.ForwardingSimpleBasePlayer
 
 @UnstableApi
 class MusicPlaybackService : MediaSessionService() {
     private var mediaSession: MediaSession? = null
-    private var player: ExoPlayer? = null
+    private var firstPlayer: ExoPlayer? = null
+    private var secondPlayer: ExoPlayer? = null
+    private var activePlayer: ExoPlayer? = null
+    private var standbyPlayer: ExoPlayer? = null
+    private var sessionPlayer: SwappablePlayer? = null
+
     private val handler = Handler(Looper.getMainLooper())
     private val transitionMs = 4_000L
-    private var fadeStartedAt = 0L
-    private var fadeStartVolume = 1f
-    private var fadingOut = false
-    private var lastMediaItem: MediaItem? = null
+    private var transitionStartedAt = 0L
+    private var transitioning = false
+    private var outgoingPlayer: ExoPlayer? = null
+    private var incomingPlayer: ExoPlayer? = null
+    private var pausedAt = 0L
+
+    private val playerListener = object : Player.Listener {
+        override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
+            // If a manual skip or a natural transition happens before the fade completes,
+            // cancel the prepared overlap and let ExoPlayer's normal queue transition win.
+            if (transitioning && this@MusicPlaybackService.activePlayer === outgoingPlayer) {
+                cancelTransition()
+            }
+        }
+    }
 
     private val transitionTicker = object : Runnable {
         override fun run() {
-            val p = player
-            if (p != null && p.isPlaying) {
-                val duration = p.duration
-                val position = p.currentPosition
-                if (duration > 0L && duration != C.TIME_UNSET) {
-                    val remaining = duration - position
-                    if (!fadingOut && remaining in 1L..transitionMs) {
-                        fadingOut = true
-                        fadeStartedAt = SystemClock.elapsedRealtime()
-                        fadeStartVolume = p.volume.coerceIn(0f, 1f)
+            val active = activePlayer
+            if (active != null && active.isPlaying) {
+                if (!transitioning) {
+                    val duration = active.duration
+                    val remaining = duration - active.currentPosition
+                    if (duration > 0L && duration != C.TIME_UNSET &&
+                        remaining in 1L..transitionMs &&
+                        active.repeatMode != Player.REPEAT_MODE_ONE &&
+                        active.hasNextMediaItem()
+                    ) {
+                        beginTransition(active)
                     }
-                    if (fadingOut) {
-                        val elapsed = (SystemClock.elapsedRealtime() - fadeStartedAt).coerceAtLeast(0L)
-                        val fraction = (elapsed.toFloat() / transitionMs.toFloat()).coerceIn(0f, 1f)
-                        p.volume = fadeStartVolume * (1f - fraction)
+                } else {
+                    val outgoing = outgoingPlayer
+                    val incoming = incomingPlayer
+                    if (outgoing != null && incoming != null) {
+                        if (outgoing.isPlaying) {
+                            val elapsed = (SystemClock.elapsedRealtime() - transitionStartedAt)
+                                .coerceAtLeast(0L)
+                            val fraction = (elapsed.toFloat() / transitionMs.toFloat()).coerceIn(0f, 1f)
+                            outgoing.volume = 1f - fraction
+                            incoming.volume = fraction
+                            if (fraction >= 1f) finishTransition(outgoing, incoming)
+                        } else {
+                            // Keep both players aligned if the user pauses during a fade.
+                            incoming.pause()
+                            if (pausedAt == 0L) pausedAt = SystemClock.elapsedRealtime()
+                        }
                     }
                 }
             }
-            handler.postDelayed(this, 100L)
+            handler.postDelayed(this, 40L)
         }
     }
 
     override fun onCreate() {
         super.onCreate()
-        val exoPlayer = ExoPlayer.Builder(this)
-            .setAudioAttributes(
-                AudioAttributes.Builder()
-                    .setUsage(C.USAGE_MEDIA)
-                    .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
-                    .build(),
-                true
-            )
+        val audioAttributes = AudioAttributes.Builder()
+            .setUsage(C.USAGE_MEDIA)
+            .setContentType(C.AUDIO_CONTENT_TYPE_MUSIC)
+            .build()
+
+        fun buildPlayer(): ExoPlayer = ExoPlayer.Builder(this)
+            .setAudioAttributes(audioAttributes, true)
             .setHandleAudioBecomingNoisy(true)
             .build()
-        player = exoPlayer
-        lastMediaItem = exoPlayer.currentMediaItem
-        exoPlayer.addListener(object : Player.Listener {
-            override fun onMediaItemTransition(mediaItem: MediaItem?, reason: Int) {
-                if (mediaItem != lastMediaItem) {
-                    lastMediaItem = mediaItem
-                    fadingOut = false
-                    fadeStartedAt = SystemClock.elapsedRealtime()
-                    fadeStartVolume = 0f
-                    exoPlayer.volume = 0f
-                    // Fade in the new track gradually; the outgoing track has already faded down.
-                    handler.post(object : Runnable {
-                        override fun run() {
-                            if (player !== exoPlayer || exoPlayer.currentMediaItem != mediaItem) return
-                            if (!exoPlayer.isPlaying) {
-                                handler.postDelayed(this, 100L)
-                                return
-                            }
-                            val elapsed = (SystemClock.elapsedRealtime() - fadeStartedAt).coerceAtLeast(0L)
-                            val fraction = (elapsed.toFloat() / transitionMs.toFloat()).coerceIn(0f, 1f)
-                            exoPlayer.volume = fraction
-                            if (fraction < 1f) handler.postDelayed(this, 50L)
-                            else exoPlayer.volume = 1f
-                        }
-                    })
-                }
-            }
 
-            override fun onPlaybackStateChanged(playbackState: Int) {
-                if (playbackState == Player.STATE_READY && !fadingOut && exoPlayer.volume == 0f) {
-                    exoPlayer.volume = 1f
-                }
-            }
-        })
-        mediaSession = MediaSession.Builder(this, exoPlayer).build()
+        val first = buildPlayer()
+        val second = buildPlayer()
+        firstPlayer = first
+        secondPlayer = second
+        activePlayer = first
+        standbyPlayer = second
+        first.addListener(playerListener)
+        second.addListener(playerListener)
+
+        val forwardingPlayer = SwappablePlayer(first)
+        sessionPlayer = forwardingPlayer
+        mediaSession = MediaSession.Builder(this, forwardingPlayer).build()
         handler.post(transitionTicker)
+    }
+
+    private fun beginTransition(outgoing: ExoPlayer) {
+        val incoming = standbyPlayer ?: return
+        val nextIndex = outgoing.nextMediaItemIndex
+        if (nextIndex !in 0 until outgoing.mediaItemCount) return
+
+        val queue = (0 until outgoing.mediaItemCount).map(outgoing::getMediaItemAt)
+        runCatching {
+            incoming.stop()
+            incoming.clearMediaItems()
+            incoming.setMediaItems(queue, nextIndex, 0L)
+            incoming.repeatMode = outgoing.repeatMode
+            incoming.shuffleModeEnabled = outgoing.shuffleModeEnabled
+            incoming.volume = 0f
+            incoming.prepare()
+            incoming.play()
+        }.onFailure {
+            incoming.volume = 1f
+            return
+        }
+
+        transitioning = true
+        transitionStartedAt = SystemClock.elapsedRealtime()
+        pausedAt = 0L
+        outgoingPlayer = outgoing
+        incomingPlayer = incoming
+    }
+
+    private fun finishTransition(outgoing: ExoPlayer, incoming: ExoPlayer) {
+        incoming.volume = 1f
+        outgoing.volume = 0f
+        sessionPlayer?.swapTo(incoming)
+        activePlayer = incoming
+        standbyPlayer = outgoing
+
+        outgoing.pause()
+        outgoing.stop()
+        outgoing.clearMediaItems()
+        outgoing.volume = 1f
+
+        transitioning = false
+        outgoingPlayer = null
+        incomingPlayer = null
+        pausedAt = 0L
+    }
+
+    private fun cancelTransition() {
+        outgoingPlayer?.volume = 1f
+        incomingPlayer?.let {
+            it.pause()
+            it.stop()
+            it.clearMediaItems()
+            it.volume = 1f
+        }
+        transitioning = false
+        outgoingPlayer = null
+        incomingPlayer = null
+        pausedAt = 0L
     }
 
     override fun onGetSession(controllerInfo: MediaSession.ControllerInfo): MediaSession? = mediaSession
 
     override fun onDestroy() {
         handler.removeCallbacksAndMessages(null)
+        cancelTransition()
         mediaSession?.release()
         mediaSession = null
-        player?.release()
-        player = null
+        firstPlayer?.removeListener(playerListener)
+        secondPlayer?.removeListener(playerListener)
+        firstPlayer?.release()
+        secondPlayer?.release()
+        firstPlayer = null
+        secondPlayer = null
+        activePlayer = null
+        standbyPlayer = null
+        sessionPlayer = null
         super.onDestroy()
+    }
+
+    private class SwappablePlayer(initialPlayer: Player) : ForwardingSimpleBasePlayer(initialPlayer) {
+        fun swapTo(player: Player) {
+            setPlayer(player)
+        }
     }
 }
